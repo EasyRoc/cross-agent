@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - 商品分析 Agent</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: { 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#2563eb', 600: '#1d4ed8', 700: '#1e40af' },
+      }
+    }
+  }
+}
+</script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+[data-theme="dark"] body {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+}
+.login-card {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px) saturate(1.8);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 16px;
+  padding: 40px;
+  width: 400px;
+  max-width: 90vw;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+}
+[data-theme="dark"] .login-card {
+  background: rgba(30, 41, 59, 0.75);
+  border-color: rgba(51, 65, 85, 0.8);
+}
+.form-input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: rgba(255,255,255,0.8);
+  color: #1e293b;
+  transition: 0.2s;
+  outline: none;
+}
+[data-theme="dark"] .form-input {
+  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(51, 65, 85, 0.8);
+  color: #f1f5f9;
+}
+.form-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: 0.2s;
+  width: 100%;
+}
+.btn-primary { background: #2563eb; color: white; }
+.btn-primary:hover { background: #1d4ed8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.3); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-ghost {
+  background: transparent;
+  color: #64748b;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px;
+}
+.btn-ghost:hover { color: #2563eb; }
+.error-msg { color: #ef4444; font-size: 13px; min-height: 20px; margin-bottom: 8px; }
+</style>
+</head>
+<body data-theme="light">
+<div class="login-card">
+  <div style="text-align:center;margin-bottom:32px;">
+    <div style="font-size:48px;margin-bottom:12px;">🧠</div>
+    <h1 style="font-size:20px;font-weight:700;color:#1e293b;margin-bottom:4px;">商品分析 Agent</h1>
+    <p style="font-size:13px;color:#64748b;" id="formTitle">登录以管理你的分析任务</p>
+  </div>
+
+  <div class="error-msg" id="errorMsg"></div>
+
+  <!-- 登录表单 -->
+  <form id="loginForm" onsubmit="return doLogin()">
+    <div style="margin-bottom:16px;">
+      <label style="font-size:13px;font-weight:500;color:#64748b;display:block;margin-bottom:4px;">用户名</label>
+      <input class="form-input" id="username" type="text" placeholder="请输入用户名" required autocomplete="username">
+    </div>
+    <div style="margin-bottom:24px;">
+      <label style="font-size:13px;font-weight:500;color:#64748b;display:block;margin-bottom:4px;">密码</label>
+      <input class="form-input" id="password" type="password" placeholder="请输入密码" required autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" id="loginBtn" type="submit">登 录</button>
+  </form>
+
+  <div style="text-align:center;margin-top:16px;">
+    <button class="btn-ghost" id="switchBtn" onclick="toggleMode()">没有账号？注册</button>
+  </div>
+
+  <div style="text-align:center;margin-top:8px;">
+    <a href="/" style="font-size:13px;color:#64748b;text-decoration:none;">← 返回首页</a>
+  </div>
+</div>
+
+<script>
+// ==================== 状态 ====================
+let isRegisterMode = false;
+
+function toggleMode() {
+  isRegisterMode = !isRegisterMode;
+  document.getElementById('formTitle').textContent = isRegisterMode ? '注册新账号，开始分析之旅' : '登录以管理你的分析任务';
+  document.getElementById('loginBtn').textContent = isRegisterMode ? '注 册' : '登 录';
+  document.getElementById('switchBtn').textContent = isRegisterMode ? '已有账号？登录' : '没有账号？注册';
+  document.getElementById('errorMsg').textContent = '';
+}
+
+// ==================== 登录 / 注册 ====================
+
+async function doLogin() {
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value.trim();
+  const errorMsg = document.getElementById('errorMsg');
+  const btn = document.getElementById('loginBtn');
+
+  if (!username || !password) {
+    errorMsg.textContent = '请输入用户名和密码';
+    return false;
+  }
+
+  btn.disabled = true;
+  btn.textContent = isRegisterMode ? '注册中...' : '登录中...';
+  errorMsg.textContent = '';
+
+  try {
+    const endpoint = isRegisterMode ? '/api/register' : '/api/login';
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      errorMsg.textContent = data.detail || '操作失败';
+      return false;
+    }
+
+    if (isRegisterMode) {
+      // 注册成功，切换到登录模式
+      isRegisterMode = false;
+      toggleMode();
+      errorMsg.style.color = '#10b981';
+      errorMsg.textContent = '注册成功！请登录';
+      return false;
+    }
+
+    // 登录成功，保存 token（key 与 tasks.js 保持一致）
+    localStorage.setItem('agent_token', data.token);
+    localStorage.setItem('agent_user', JSON.stringify(data.user));
+    window.location.href = '/';
+    return false;
+
+  } catch (e) {
+    errorMsg.textContent = '网络错误，请重试';
+    return false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = isRegisterMode ? '注 册' : '登 录';
+  }
+}
+
+// 回车提交
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('password').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doLogin();
+  });
+});
+</script>
+</body>
+</html>

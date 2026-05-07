@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>商品分析 Agent</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: { 50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd', 400: '#60a5fa', 500: '#2563eb', 600: '#1d4ed8', 700: '#1e40af' },
+        glass: { light: 'rgba(255,255,255,0.7)', dark: 'rgba(30,41,59,0.7)' },
+      }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- ===== 顶栏 ===== -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-logo">🧠</span>
+      <div>
+        <h1 class="topbar-title">商品分析 Agent</h1>
+        <p class="topbar-subtitle">多源数据 · 多维度分析 · 智能报告</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="userInfo" style="font-size:13px;color:var(--text-secondary);margin-right:4px;"></span>
+      <span id="userMenu"></span>
+      <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="切换主题">🌙</button>
+      <button class="icon-btn" id="sidebarToggle" onclick="toggleSidebar()" title="切换侧边栏">☰</button>
+    </div>
+  </header>
+
+  <!-- ===== 主内容区 ===== -->
+  <main class="main-content">
+
+    <!-- 左侧：对话区 -->
+    <section class="chat-section" id="chatSection">
+      <div class="chat-container" id="chatContainer">
+        <!-- 欢迎页 -->
+        <div class="welcome" id="welcome">
+          <div class="welcome-icon">📊</div>
+          <h2>开始商品分析</h2>
+          <p class="welcome-desc">输入商品名称和需求，AI 将从多平台采集数据，多维度分析后生成报告</p>
+          <div class="welcome-examples">
+            <div class="example-chip" onclick="quickInput('男性衬衫爆款分析')">👔 男性衬衫爆款分析</div>
+            <div class="example-chip" onclick="quickInput('运动鞋2025流行趋势')">👟 运动鞋2025流行趋势</div>
+            <div class="example-chip" onclick="quickInput('夏季女装价格带与风格')">👗 夏季女装价格带与风格</div>
+            <div class="example-chip" onclick="quickInput('母婴用品购买动机分析')">🍼 母婴用品购买动机分析</div>
+          </div>
+        </div>
+        <!-- 消息会动态插入到这里 -->
+      </div>
+    </section>
+
+    <!-- 右侧：分析侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <!-- 默认状态：引导 -->
+      <div class="sidebar-placeholder" id="sidebarPlaceholder">
+        <div class="placeholder-icon">🔍</div>
+        <p>输入分析请求后，<br>分析进度和结果将显示在这里</p>
+      </div>
+
+      <!-- 分析参数 -->
+      <div class="sidebar-card" id="analysisParams" style="display:none;">
+        <div class="card-header">📊 分析参数</div>
+        <div class="param-list" id="paramList"></div>
+      </div>
+
+      <!-- 分析进度 -->
+      <div class="sidebar-card" id="analysisProgress" style="display:none;">
+        <div class="card-header">🔍 分析进度</div>
+        <div class="progress-list" id="progressList"></div>
+      </div>
+
+      <!-- 概览确认 -->
+      <div class="sidebar-card overview-card" id="overviewCard" style="display:none;">
+        <div class="card-header">📋 分析概览</div>
+        <div class="overview-body" id="overviewBody">
+          <div class="overview-summary" id="overviewSummary"></div>
+          <div class="overview-findings" id="overviewFindings"></div>
+          <div class="overview-dims" id="overviewDims"></div>
+        </div>
+        <div class="overview-actions">
+          <textarea class="feedback-input" id="feedbackInput" placeholder="改进建议（可选）..." rows="2"></textarea>
+          <div class="action-row">
+            <button class="btn btn-primary" onclick="confirmAnalysis()">✅ 确认生成报告</button>
+            <button class="btn btn-outline" onclick="rejectAnalysis()">🔄 重新分析</button>
+            <button class="btn btn-ghost" onclick="terminateAnalysis()">终止</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 报告下载 -->
+      <div class="sidebar-card report-card" id="reportCard" style="display:none;">
+        <div class="card-header">📄 报告已就绪</div>
+        <div class="report-actions">
+          <a class="btn btn-primary btn-block" id="downloadMd" href="#" target="_blank">📥 下载 Markdown</a>
+          <a class="btn btn-primary btn-block" id="downloadPdf" href="#" target="_blank">📥 下载 PDF</a>
+          <button class="btn btn-outline btn-block" onclick="startNewAnalysis()">🔄 开始新分析</button>
+        </div>
+      </div>
+
+      <!-- 任务列表 -->
+      <div class="sidebar-card" id="taskListCard" style="display:none;">
+        <div class="card-header">📋 我的任务</div>
+        <div id="taskListContent" style="padding:12px 16px;max-height:300px;overflow-y:auto;"></div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ===== 底部输入区 ===== -->
+  <footer class="input-area">
+    <div class="input-wrapper">
+      <textarea class="input-box" id="inputBox" rows="1" placeholder="输入商品分析请求，例如：男式衬衫爆款分析..." oninput="autoResize(this)"></textarea>
+      <button class="btn btn-primary btn-send" id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+  </footer>
+</div>
+
+<script src="/static/app.js"></script>
+<script src="/static/tasks.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+[project]
+name = "cross-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "openai>=1.30.0",
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "pymilvus>=2.4.0",
+    "sentence-transformers>=3.0.0",
+    "rank-bm25>=0.2.2",
+    "weasyprint>=62.0",
+    "markdown>=3.6",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "tavily>=0.3.0",
+    "jinja2>=3.1.0",
+    "aiofiles>=23.0.0",
+    "bcrypt>=4.1.0",
+    "pyjwt>=2.8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
