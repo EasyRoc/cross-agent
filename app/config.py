@@ -60,11 +60,11 @@ class Settings(BaseSettings):
     # 当阿里百炼额度不足时自动降级到本地 Ollama 模型
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:8b"
-    ollama_embedding_model: str = "qwen2.5:7b"
+    ollama_embedding_model: str = "dengcao/Qwen3-Embedding-4B:Q4_K_M"
 
     # ==================== Milvus 集合配置 ====================
     milvus_collection: str = "product_catalog"  # 商品目录集合名
-    milvus_dense_dim: int = 1024  # 密集向量维度
+    milvus_dense_dim: int = 1024  # 密集向量维度d
 
     # ==================== RAG 检索参数 ====================
     rag_dense_weight: float = 0.7   # 密集向量检索权重（语义匹配）

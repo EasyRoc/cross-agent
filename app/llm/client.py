@@ -10,6 +10,7 @@ import json
 import time
 from typing import AsyncGenerator
 from openai import AsyncOpenAI, RateLimitError, APIError, APIStatusError
+import httpx
 from app.config import settings
 from app.logger import get_logger
 
@@ -44,6 +45,8 @@ class LLMClient:
             api_key="ollama",
             base_url=settings.ollama_base_url,
         )
+        # Ollama 原生 API 地址（不带 /v1 后缀）
+        self._ollama_native_base = settings.ollama_base_url.rstrip("/v1").rstrip("/")
         # 是否处于降级模式（True 时直接走 Ollama，不再重试 Bailian）
         self._fallback = False
 
@@ -170,29 +173,58 @@ class LLMClient:
             return {}
 
     async def embed(self, text: str) -> list[float]:
-        """生成文本向量（自动降级）"""
-        provider_name = "Ollama" if self._fallback else "阿里百炼"
-        model = settings.ollama_embedding_model if self._fallback else settings.embedding_model
+        """生成文本向量（自动降级）
 
+        阿里百炼走 OpenAI 兼容 API，Ollama 走原生 /api/embed。
+        """
         start = time.time()
+
+        # ----- 阿里百炼（OpenAI 兼容 API） -----
+        if not self._fallback:
+            try:
+                resp = await self._bailian.embeddings.create(
+                    model=settings.embedding_model,
+                    input=text,
+                )
+                vector = resp.data[0].embedding
+                logger.debug(
+                    "向量化完成 [%s@阿里百炼]，耗时 %.2fs，维度 %d",
+                    settings.embedding_model, time.time() - start, len(vector),
+                )
+                return vector
+            except (RateLimitError, APIError) as e:
+                if _is_quota_error(e):
+                    logger.warning("阿里百炼向量化额度不足 (%s)，降级到本地 Ollama", e)
+                    self._fallback = True
+                    return await self.embed(text)
+                logger.error("阿里百炼向量化失败: %s", e)
+                raise
+
+        # ----- Ollama（原生 /api/embed） -----
+        url = f"{self._ollama_native_base}/api/embed"
+        payload = {
+            "model": settings.ollama_embedding_model,
+            "input": text,
+        }
         try:
-            resp = await self._provider().embeddings.create(
-                model=model,
-                input=text,
-            )
-            vector = resp.data[0].embedding
-            logger.debug(
-                "向量化完成 [%s@%s]，耗时 %.2fs，维度 %d",
-                model, provider_name, time.time() - start, len(vector),
-            )
-            return vector
-        except (RateLimitError, APIError) as e:
-            if not self._fallback and _is_quota_error(e):
-                logger.warning("阿里百炼向量化额度不足 (%s)，降级到本地 Ollama", e)
-                self._fallback = True
-                return await self.embed(text)
-            logger.error("向量化失败 [%s]: %s", provider_name, e)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as e:
+            logger.error("Ollama 向量化失败: %s", e)
             raise
+
+        embeddings = data.get("embeddings", [])
+        if not embeddings:
+            raise RuntimeError(f"Ollama 向量化返回空结果: {data}")
+
+        vector = embeddings[0]
+        logger.debug(
+            "向量化完成 [%s@Ollama]，耗时 %.2fs，维度 %d",
+            settings.ollama_embedding_model, time.time() - start, len(vector),
+        )
+        return vector
 
 
 # ==================== 全局单例 ====================
