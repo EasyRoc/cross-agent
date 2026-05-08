@@ -231,6 +231,7 @@ body {
 .sidebar {
   width: 380px;
   min-width: 320px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -303,7 +304,7 @@ body {
 }
 
 /* 进度列表 */
-.progress-list { padding: 12px 16px; }
+.progress-list { padding: 12px 16px; max-height: 320px; overflow-y: auto; }
 .progress-step {
   display: flex;
   align-items: center;
@@ -340,8 +341,18 @@ body {
 .step-label { flex: 1; }
 
 /* 概览卡片 */
-.overview-card { border-color: var(--primary); }
-.overview-body { padding: 12px 16px; max-height: 320px; overflow-y: auto; }
+.overview-card {
+  border-color: var(--primary);
+  display: flex;
+  flex-direction: column;
+  max-height: 55vh;
+}
+.overview-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+}
 .overview-summary {
   background: var(--bg);
   padding: 10px 12px;
@@ -378,6 +389,7 @@ body {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
   background: var(--bg);
+  flex-shrink: 0;
 }
 .feedback-input {
   width: 100%;

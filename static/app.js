@@ -102,24 +102,39 @@ function handleMessage(msg) {
     case 'status':
       // 状态提示
       removeTyping();
-      // 更新进度
-      updateProgress(msg.content);
+      if (getToken()) {
+        updateProgress(msg.content);
+      }
       break;
 
     case 'overview':
       // 概览就绪
       removeTyping();
       STATE.overviewData = msg.data;
-      showOverview(msg.data);
-      setProcessing(false);
-      input.disabled = true;
-      sendBtn.disabled = true;
+      if (getToken()) {
+        showOverview(msg.data);
+        setProcessing(false);
+        input.disabled = true;
+        sendBtn.disabled = true;
+      } else {
+        setProcessing(false);
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+      }
       break;
 
     case 'report_ready':
       // 报告就绪
       removeTyping();
-      showReportPanel(msg);
+      if (getToken()) {
+        showReportPanel(msg);
+      } else {
+        setProcessing(false);
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+      }
       break;
 
     case 'error':
@@ -164,7 +179,15 @@ function sendMessage() {
   document.getElementById('overviewCard').style.display = 'none';
   document.getElementById('reportCard').style.display = 'none';
   hideWelcome();
-  resetProgress();
+
+  const loggedIn = getToken();
+  if (loggedIn) {
+    resetProgress();
+  } else {
+    // 未登录用户不显示侧边栏分析卡片
+    document.getElementById('analysisProgress').style.display = 'none';
+    document.getElementById('analysisParams').style.display = 'none';
+  }
 
   addMessage(content, 'user');
   input.value = '';
@@ -176,7 +199,7 @@ function sendMessage() {
 
   STATE.currentStreamMsg = null;
   addTyping();
-  showSidebarParams(content);
+  if (loggedIn) showSidebarParams(content);
 
   if (!STATE.ws || STATE.ws.readyState !== WebSocket.OPEN) {
     connectWebSocket();
@@ -339,7 +362,7 @@ function showSidebarParams(content) {
 function showOverview(data) {
   document.getElementById('analysisProgress').style.display = 'none';
   const card = document.getElementById('overviewCard');
-  card.style.display = 'block';
+  card.style.display = 'flex';
 
   // 摘要
   document.getElementById('overviewSummary').textContent = data.summary || '';
@@ -365,7 +388,18 @@ function showOverview(data) {
     dims.appendChild(div);
   });
 
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // 将操作按钮区域滚动到可视区
+  setTimeout(() => {
+    const actions = card.querySelector('.overview-actions');
+    if (actions) {
+      actions.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    // 同时确保整个侧边栏可以滚动
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+      sidebar.scrollTop = sidebar.scrollHeight;
+    }
+  }, 100);
 }
 
 // ==================== 侧边栏：报告下载 ====================

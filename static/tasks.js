@@ -113,10 +113,8 @@ async function renderTaskList(page = 1) {
       html += `<a href="/api/tasks/${t.id}/download/md${tokenParam}" class="btn btn-outline" style="padding:3px 10px;font-size:12px;text-decoration:none;">📥 MD</a>
         <a href="/api/tasks/${t.id}/download/pdf${tokenParam}" class="btn btn-outline" style="padding:3px 10px;font-size:12px;text-decoration:none;">📥 PDF</a>`;
     }
-    // 非运行中的任务可删除
-    if (t.status !== 'running') {
-      html += `<button onclick="deleteTask('${t.id}')" style="margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px;" title="删除">🗑️</button>`;
-    }
+    // 所有任务均可删除（包括进行中卡住的任务）
+    html += `<button onclick="deleteTask('${t.id}')" style="margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px;" title="删除">🗑️</button>`;
     html += '</div></div>';
   }
   container.innerHTML = html;
