@@ -2,7 +2,7 @@
  * 商品分析 Agent — 前端应用脚本
  *
  * 功能：
- * - WebSocket 实时通信
+ * - SSE 流式通信（取代 WebSocket）
  * - 左侧对话区 + 右侧分析侧边栏
  * - 流式消息展示
  * - 分析进度跟踪与概览确认
@@ -13,13 +13,11 @@
 // ==================== 状态管理 ====================
 
 const STATE = {
-  ws: null,
   sessionId: null,
   isProcessing: false,
   currentStreamMsg: null,
   overviewData: null,
   analysisProgress: [],
-  // 分析进度步骤
   steps: [
     { id: 'params', label: '分析请求参数' },
     { id: 'collect', label: '采集商品数据' },
@@ -29,7 +27,7 @@ const STATE = {
   ],
 };
 
-// ==================== WebSocket 管理 ====================
+// ==================== 会话管理 ====================
 
 function getSessionId() {
   if (!STATE.sessionId) {
@@ -42,28 +40,79 @@ function getToken() {
   return localStorage.getItem('agent_token');
 }
 
-function connectWebSocket() {
-  if (STATE.ws && STATE.ws.readyState === WebSocket.OPEN) return;
+// ==================== SSE 流式请求 ====================
 
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+async function sseFetch(url, body) {
   const token = getToken();
-  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-  const url = `${protocol}//${location.host}/ws/${getSessionId()}${tokenParam}`;
-  STATE.ws = new WebSocket(url);
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error('[SSE] 网络错误:', e);
+    handleMessage({ type: 'error', content: '网络连接失败，请检查网络后重试' });
+    setProcessing(false);
+    return;
+  }
 
-  STATE.ws.onopen = () => console.log('[WS] 已连接');
+  if (!resp.ok) {
+    let detail = '请求失败';
+    try {
+      const err = await resp.json();
+      detail = err.detail || detail;
+    } catch (_) { /* ignore */ }
+    handleMessage({ type: 'error', content: detail });
+    setProcessing(false);
+    return;
+  }
 
-  STATE.ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    handleMessage(msg);
-  };
+  if (!resp.body) {
+    handleMessage({ type: 'error', content: '浏览器不支持流式读取' });
+    setProcessing(false);
+    return;
+  }
 
-  STATE.ws.onclose = () => {
-    console.log('[WS] 已断开，3秒后重连');
-    setTimeout(connectWebSocket, 3000);
-  };
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let currentEvent = '';
 
-  STATE.ws.onerror = () => console.error('[WS] 错误');
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          try {
+            const msg = JSON.parse(line.slice(6));
+            msg.type = currentEvent;
+            handleMessage(msg);
+          } catch (e) {
+            console.error('[SSE] 解析错误:', e);
+          }
+        }
+        // 空行表示事件结束
+        if (line === '') {
+          currentEvent = '';
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[SSE] 读取流错误:', e);
+  }
 }
 
 // ==================== 消息分发 ====================
@@ -184,7 +233,6 @@ function sendMessage() {
   if (loggedIn) {
     resetProgress();
   } else {
-    // 未登录用户不显示侧边栏分析卡片
     document.getElementById('analysisProgress').style.display = 'none';
     document.getElementById('analysisParams').style.display = 'none';
   }
@@ -201,14 +249,7 @@ function sendMessage() {
   addTyping();
   if (loggedIn) showSidebarParams(content);
 
-  if (!STATE.ws || STATE.ws.readyState !== WebSocket.OPEN) {
-    connectWebSocket();
-    STATE.ws.onopen = () => {
-      STATE.ws.send(JSON.stringify({ type: 'user_message', content }));
-    };
-  } else {
-    STATE.ws.send(JSON.stringify({ type: 'user_message', content }));
-  }
+  sseFetch('/api/chat', { content, session_id: getSessionId() });
 }
 
 function quickInput(text) {
@@ -220,16 +261,17 @@ function quickInput(text) {
 // ==================== 用户决策 ====================
 
 function confirmAnalysis() {
-  if (!STATE.ws || STATE.ws.readyState !== WebSocket.OPEN) return;
-  STATE.ws.send(JSON.stringify({ type: 'decision', action: 'confirm' }));
   document.getElementById('overviewCard').style.display = 'none';
-  addMessage('✅ 已确认，正在生成详细报告...', 'system');
+  addMessage('已确认，正在生成详细报告...', 'system');
   addTyping();
   STATE.isProcessing = true;
+  sseFetch('/api/chat/decide', {
+    session_id: getSessionId(),
+    action: 'confirm',
+  });
 }
 
 function rejectAnalysis() {
-  if (!STATE.ws || STATE.ws.readyState !== WebSocket.OPEN) return;
   const feedback = document.getElementById('feedbackInput').value.trim();
   if (!feedback) {
     document.getElementById('feedbackInput').focus();
@@ -237,19 +279,30 @@ function rejectAnalysis() {
     setTimeout(() => document.getElementById('feedbackInput').style.borderColor = '', 2000);
     return;
   }
-  STATE.ws.send(JSON.stringify({ type: 'decision', action: 'reject', feedback }));
   document.getElementById('overviewCard').style.display = 'none';
   document.getElementById('feedbackInput').value = '';
-  addMessage('🔄 已提交反馈，正在重新分析...', 'system');
+  addMessage('已提交反馈，正在重新分析...', 'system');
   resetProgress();
   addTyping();
   STATE.isProcessing = true;
+  sseFetch('/api/chat/decide', {
+    session_id: getSessionId(),
+    action: 'reject',
+    feedback,
+  });
 }
 
 function terminateAnalysis() {
-  if (!STATE.ws || STATE.ws.readyState !== WebSocket.OPEN) return;
   if (!confirm('确定要终止当前分析吗？')) return;
-  STATE.ws.send(JSON.stringify({ type: 'decision', action: 'terminate' }));
+  const token = getToken();
+  fetch('/api/chat/terminate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ session_id: getSessionId() }),
+  }).catch(e => console.error('终止请求失败:', e));
   document.getElementById('overviewCard').style.display = 'none';
   document.getElementById('feedbackInput').value = '';
 }
@@ -258,15 +311,13 @@ function startNewAnalysis() {
   document.getElementById('reportCard').style.display = 'none';
   document.getElementById('overviewCard').style.display = 'none';
   resetSidebar();
-  // 保持任务列表可见
   if (getToken()) {
     document.getElementById('taskListCard').style.display = 'block';
   }
   setProcessing(false);
   document.getElementById('inputBox').disabled = false;
   document.getElementById('sendBtn').disabled = false;
-  STATE.sessionId = null;
-  connectWebSocket();
+  STATE.sessionId = Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6);
   document.getElementById('inputBox').focus();
 }
 
@@ -524,15 +575,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 初始化用户 UI（由 tasks.js 提供）
   if (window.updateUserUI) {
     window.updateUserUI();
   }
-  // 已登录时显示任务列表
   if (getToken()) {
     document.getElementById('taskListCard').style.display = 'block';
     if (window.renderTaskList) window.renderTaskList();
   }
-
-  connectWebSocket();
 });

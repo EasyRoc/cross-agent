@@ -17,7 +17,6 @@ LangGraph Supervisor 图定义
     overview_generator
         │
     human_feedback ──rejected──→ multi_dim_analyzer
-        │ confirmed              │ terminated
     final_report_generator    [END]
         │
     [END]
@@ -30,6 +29,7 @@ Supervisor 模式说明：
 """
 
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from app.models.state import AgentState
 from app.agent.nodes import (
     intent_recognition_node,
@@ -70,10 +70,13 @@ def create_graph() -> StateGraph:
 
     # ===== 有向边定义 =====
 
+    # 入口：先运行意图识别节点
+    workflow.set_entry_point("intent_recognition")
+
     # 入口条件边：根据意图识别结果路由
     # - product_analysis → 进入数据采集
-    # - normal_chat → 直接结束（由 WebSocket 处理回复）
-    workflow.set_conditional_entry_point(
+    # - normal_chat → 直接结束（由 chat.py 在 graph 外流式回复）
+    workflow.add_conditional_edges(
         "intent_recognition",
         lambda s: "product_analysis" if s.get("intent") == "product_analysis" else "normal_chat",
         {
@@ -133,6 +136,6 @@ def get_analysis_graph():
     if _analysis_graph is None:
         logger.info("首次编译 LangGraph 工作流")
         graph = create_graph()
-        _analysis_graph = graph.compile()
-        logger.info("LangGraph 工作流编译完成")
+        _analysis_graph = graph.compile(checkpointer=MemorySaver())
+        logger.info("LangGraph 工作流编译完成（已启用 Checkpointer）")
     return _analysis_graph

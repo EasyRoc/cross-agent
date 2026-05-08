@@ -8,7 +8,8 @@ API 端点：
     GET  /              — 前端页面
     GET  /health       — 健康检查
     GET  /download/... — 报告下载
-    WS   /ws/{id}      — WebSocket 实时分析
+    POST /api/chat     — 发送消息（SSE 流式响应）
+    POST /api/chat/decide — 用户决策（SSE 流式响应）
 """
 
 from pathlib import Path
@@ -16,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from app.api.websocket import router as api_router
+from app.api.chat import router as chat_router
 from app.api.user_api import router as user_router
 from app.config import settings
 from app.logger import setup_logging, get_logger
@@ -33,7 +34,7 @@ app = FastAPI(
 )
 
 # ===== 挂载路由 =====
-app.include_router(api_router)
+app.include_router(chat_router)
 app.include_router(user_router)
 logger.info("API 路由挂载完成")
 

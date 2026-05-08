@@ -24,7 +24,10 @@ logger = get_logger(__name__)
 async def intent_recognition_node(state: dict) -> dict:
     """意图识别 + 参数提取
 
-    从用户最新消息中识别意图，提取分析参数。
+    快通路：若 state["intent"] 和 state["params"] 已预设（由 chat.py 提前识别），
+    直接跳过 LLM 调用返回空更新。
+
+    正常流程：从用户最新消息中识别意图，提取分析参数。
 
     Args:
         state: 当前 AgentState
@@ -37,8 +40,19 @@ async def intent_recognition_node(state: dict) -> dict:
         - params: 分析参数（仅 product_analysis 时有值）
         - status: 保持 pending
     """
+    # ===== 快通路：两者都已预设 =====
+    if state.get("intent") == "product_analysis" and state.get("params"):
+        logger.info("意图和参数已预设，跳过识别")
+        return {}
+
     # 获取用户最新输入
     user_input = state["messages"][-1]["content"] if state["messages"] else ""
+
+    # ===== 半快通路：intent 已知，只需提取参数 =====
+    if state.get("intent") == "product_analysis" and not state.get("params"):
+        logger.info("意图已知，直接提取参数")
+        return await _extract_params_only(user_input)
+
     logger.info("意图识别: %s...", user_input[:60])
 
     # ===== Step 1: 意图识别 =====
@@ -68,6 +82,15 @@ async def intent_recognition_node(state: dict) -> dict:
         }
 
     # ===== Step 2: 提取分析参数 =====
+    return await _extract_params_only(user_input)
+
+
+async def _extract_params_only(user_input: str) -> dict:
+    """仅提取分析参数（intent 已确认为 product_analysis）。"""
+    from app.models.enums import Platform, ALL_DIMENSIONS
+    from app.agent.prompts import PARAMS_EXTRACT_PROMPT
+
+    llm = get_llm_client()
     platforms_str = ", ".join([p.value for p in Platform])
     dimensions_str = ", ".join(ALL_DIMENSIONS)
     params_prompt = PARAMS_EXTRACT_PROMPT.format(
@@ -96,8 +119,7 @@ async def intent_recognition_node(state: dict) -> dict:
         }
 
     return {
-        "intent": intent,
-        "intent_confidence": confidence,
+        "intent": "product_analysis",
         "params": params,
         "status": "pending",
     }

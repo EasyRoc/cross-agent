@@ -2,8 +2,9 @@
 人工反馈节点
 
 Human-in-the-Loop（HIL）控制节点。
-用户在 WebSocket 中决策，此节点根据决策结果路由到不同的下游节点：
+通过 LangGraph 的 interrupt() 暂停图执行，等待用户通过 API 决策后恢复。
 
+决策结果路由（由 decide_next_step 处理）：
 - confirmed → final_report_generator（生成最终报告）
 - rejected → multi_dim_analyzer（根据反馈重新分析）
 - terminated → END（结束流程）
@@ -11,6 +12,7 @@ Human-in-the-Loop（HIL）控制节点。
 最大迭代次数由 settings.max_iterations 控制，默认 3 次。
 """
 
+from langgraph.types import interrupt
 from app.config import settings
 from app.logger import get_logger
 
@@ -18,19 +20,45 @@ logger = get_logger(__name__)
 
 
 async def human_feedback_node(state: dict) -> dict:
-    """人工反馈节点
+    """人工反馈节点：暂停图执行，等待用户决策。
 
-    注：实际用户交互在 WebSocket handler 中处理，
-    此节点仅传递状态，不做业务逻辑。
+    调用 interrupt() 后图执行暂停，astream() 自然结束。
+    通过 Command(resume={...}) 恢复后，interrupt() 返回用户决策数据。
 
     Args:
         state: 当前 AgentState
+            state.overview: 已生成的分析概览
 
     Returns:
-        原样返回 state
+        更新后的状态子集：
+        - status: confirmed / rejected / terminated
+        - feedback: 用户反馈（仅 rejected）
+        - iteration: 当前迭代次数
     """
-    # 状态已在 WebSocket handler 中更新
-    return state
+    logger.info("暂停图执行，等待用户决策...")
+
+    result = interrupt({
+        "type": "human_feedback_request",
+        "overview": state.get("overview"),
+    })
+
+    action = result.get("action", "terminate")
+    logger.info("收到用户决策: %s", action)
+
+    if action == "confirm":
+        state["status"] = "confirmed"
+    elif action == "reject":
+        state["status"] = "rejected"
+        state["feedback"] = result.get("feedback", "")
+        state["iteration"] = state.get("iteration", 0) + 1
+    else:
+        state["status"] = "terminated"
+
+    return {
+        "status": state["status"],
+        "feedback": state.get("feedback", ""),
+        "iteration": state.get("iteration", 0),
+    }
 
 
 def decide_next_step(state: dict) -> str:

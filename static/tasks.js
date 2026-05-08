@@ -159,14 +159,6 @@ function updateUserUI() {
 function doLogout() {
   clearAuth();
   updateUserUI();
-  // 断开旧 WebSocket 重连
-  if (window.__appState) {
-    window.__appState.token = null;
-    window.__appState.user = null;
-  }
-  if (window.location.pathname === '/') {
-    // 留在首页但清除认证状态
-  }
 }
 
 // ==================== 自动轮询 ====================
