@@ -1,45 +1,85 @@
 """
-阿里百炼 LLM 客户端
+统一 LLM 客户端
 
-基于阿里百炼兼容的 OpenAI SDK 封装，提供：
-- chat: 非流式对话，返回完整文本
-- chat_stream: 流式对话，异步生成器逐 token 返回
-- chat_json: JSON 模式对话，自动解析返回结构体
-- embed: 文本向量化
-
-注：阿里百炼兼容 OpenAI SDK 协议，因此使用 openai 包即可直连。
+封装阿里百炼（付费）和 Ollama（本地）两个后端，
+当阿里百炼额度不足时自动降级到本地 Ollama 模型。
+所有模块通过 `get_llm_client()` 获取实例，接口与之前兼容。
 """
 
 import json
 import time
 from typing import AsyncGenerator
-from openai import AsyncOpenAI, APIError
+from openai import AsyncOpenAI, RateLimitError, APIError, APIStatusError
 from app.config import settings
 from app.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class BailianClient:
-    """阿里百炼 LLM 客户端
+def _is_quota_error(e: Exception) -> bool:
+    """判断异常是否为额度/限流错误"""
+    status = None
+    if isinstance(e, RateLimitError):
+        return True
+    if isinstance(e, APIStatusError):
+        status = e.status_code
+    elif isinstance(e, APIError):
+        status = getattr(e, "status_code", None)
+    return status in (402, 429)
 
-    单例模式，全局共享一个客户端实例。
-    所有 LLM 调用通过此类完成，便于统一管理 API Key、模型选择和重试策略。
+
+class LLMClient:
+    """统一 LLM 客户端（阿里百炼 → Ollama 自动降级）
+
+    与之前的 BailianClient 方法签名完全一致，
+    使用时无需关心后端是哪一家。
     """
 
     def __init__(self):
-        """初始化 OpenAI 兼容客户端"""
-        self.client = AsyncOpenAI(
+        self._bailian = AsyncOpenAI(
             api_key=settings.dashscope_api_key,
             base_url=settings.dashscope_base_url,
         )
+        self._ollama = AsyncOpenAI(
+            api_key="ollama",
+            base_url=settings.ollama_base_url,
+        )
+        # 是否处于降级模式（True 时直接走 Ollama，不再重试 Bailian）
+        self._fallback = False
+
         logger.info(
-            "阿里百炼客户端初始化完成，模型配置: intent=%s, analysis=%s, report=%s, embedding=%s",
+            "LLM 客户端初始化完成，"
+            "主后端: 阿里百炼 (intent=%s, analysis=%s, report=%s, embedding=%s)，"
+            "降级后端: Ollama (%s)",
             settings.intent_model,
             settings.analysis_model,
             settings.report_model,
             settings.embedding_model,
+            settings.ollama_model,
         )
+
+    # ---------- 模型映射 ----------
+
+    def _resolve_model(self, model: str | None, task: str = "analysis") -> str:
+        """根据任务类型和降级状态解析实际模型名"""
+        if model:
+            return model
+        if self._fallback:
+            return settings.ollama_model
+        mapping = {
+            "intent": settings.intent_model,
+            "analysis": settings.analysis_model,
+            "report": settings.report_model,
+            "summary": settings.summary_model,
+            "embedding": settings.embedding_model,
+        }
+        return mapping.get(task, settings.analysis_model)
+
+    def _provider(self):
+        """获取当前使用的后端客户端"""
+        return self._ollama if self._fallback else self._bailian
+
+    # ---------- 核心方法 ----------
 
     async def chat(
         self,
@@ -48,41 +88,36 @@ class BailianClient:
         temperature: float = 0.1,
         response_format: dict | None = None,
     ) -> str:
-        """非流式 LLM 对话
+        """非流式 LLM 对话（自动降级）"""
+        provider_name = "Ollama" if self._fallback else "阿里百炼"
+        resolved = self._resolve_model(model)
 
-        Args:
-            messages: 对话消息列表 [{"role": "user", "content": "..."}]
-            model: 模型名，默认使用 analysis_model
-            temperature: 生成温度，0.1 偏确定，0.7 偏创造
-            response_format: 响应格式约束，如 {"type": "json_object"}
-
-        Returns:
-            模型返回的文本内容
-
-        Raises:
-            APIError: API 调用失败
-        """
-        start_time = time.time()
+        start = time.time()
         kwargs = {
-            "model": model or settings.analysis_model,
+            "model": resolved,
             "messages": messages,
             "temperature": temperature,
         }
         if response_format:
             kwargs["response_format"] = response_format
 
-        # 记录请求摘要（消息太长时截断）
         msg_preview = messages[-1]["content"][:100] if messages else ""
-        logger.debug("LLM 请求 [%s]: %s...", kwargs["model"], msg_preview)
+        logger.debug("LLM 请求 [%s@%s]: %s...", resolved, provider_name, msg_preview)
 
         try:
-            resp = await self.client.chat.completions.create(**kwargs)
+            resp = await self._provider().chat.completions.create(**kwargs)
             result = resp.choices[0].message.content or ""
-            elapsed = time.time() - start_time
-            logger.debug("LLM 响应完成，耗时 %.2fs，长度 %d 字符", elapsed, len(result))
+            logger.debug(
+                "LLM 响应完成 [%s@%s]，耗时 %.2fs，长度 %d",
+                resolved, provider_name, time.time() - start, len(result),
+            )
             return result
-        except APIError as e:
-            logger.error("LLM API 调用失败: %s", e)
+        except (RateLimitError, APIError) as e:
+            if not self._fallback and _is_quota_error(e):
+                logger.warning("阿里百炼额度不足 (%s)，降级到本地 Ollama 模型", e)
+                self._fallback = True
+                return await self.chat(messages, model, temperature, response_format)
+            logger.error("LLM 调用失败 [%s]: %s", provider_name, e)
             raise
 
     async def chat_stream(
@@ -91,46 +126,41 @@ class BailianClient:
         model: str | None = None,
         temperature: float = 0.1,
     ) -> AsyncGenerator[str, None]:
-        """流式 LLM 对话
+        """流式 LLM 对话（自动降级）"""
+        provider_name = "Ollama" if self._fallback else "阿里百炼"
+        resolved = self._resolve_model(model)
 
-        通过异步生成器逐 token 返回结果，适合实时展示场景。
-        使用 async for token in client.chat_stream(...) 消费。
+        logger.debug("LLM 流式请求 [%s@%s]", resolved, provider_name)
 
-        Yields:
-            逐 token 的文本片段
-        """
-        stream = await self.client.chat.completions.create(
-            model=model or settings.analysis_model,
-            messages=messages,
-            temperature=temperature,
-            stream=True,
-        )
-
-        token_count = 0
-        async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                token_count += 1
-                yield content
-
-        logger.debug("流式响应完成，共 %d 个 token", token_count)
+        try:
+            stream = await self._provider().chat.completions.create(
+                model=resolved,
+                messages=messages,
+                temperature=temperature,
+                stream=True,
+            )
+            token_count = 0
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    token_count += 1
+                    yield content
+            logger.debug("LLM 流式完成 [%s@%s]，共 %d token", resolved, provider_name, token_count)
+        except (RateLimitError, APIError) as e:
+            if not self._fallback and _is_quota_error(e):
+                logger.warning("阿里百炼流式额度不足 (%s)，降级到本地 Ollama", e)
+                self._fallback = True
+                async for token in self.chat_stream(messages, model, temperature):
+                    yield token
+            else:
+                logger.error("LLM 流式调用失败 [%s]: %s", provider_name, e)
+                raise
 
     async def chat_json(self, messages: list[dict], model: str | None = None) -> dict:
-        """JSON 模式对话
-
-        调用 LLM 并强制返回 JSON 格式，自动解析为 Python dict。
-        用于意图识别、参数提取等需要结构化输出的场景。
-
-        Args:
-            messages: 对话消息
-            model: 模型名
-
-        Returns:
-            解析后的 JSON 字典
-        """
+        """JSON 模式对话（自动降级）"""
         text = await self.chat(
             messages=messages,
-            model=model or settings.analysis_model,
+            model=model,
             response_format={"type": "json_object"},
         )
         try:
@@ -140,40 +170,40 @@ class BailianClient:
             return {}
 
     async def embed(self, text: str) -> list[float]:
-        """生成文本向量
+        """生成文本向量（自动降级）"""
+        provider_name = "Ollama" if self._fallback else "阿里百炼"
+        model = settings.ollama_embedding_model if self._fallback else settings.embedding_model
 
-        使用 text-embedding-v3 模型将文本转为向量。
-        用于 Milvus 向量检索的查询向量生成。
-
-        Args:
-            text: 待向量化的文本
-
-        Returns:
-            float 类型的向量列表
-        """
-        start_time = time.time()
-        resp = await self.client.embeddings.create(
-            model=settings.embedding_model,
-            input=text,
-        )
-        vector = resp.data[0].embedding
-        elapsed = time.time() - start_time
-        logger.debug("向量化完成，耗时 %.2fs，维度 %d", elapsed, len(vector))
-        return vector
+        start = time.time()
+        try:
+            resp = await self._provider().embeddings.create(
+                model=model,
+                input=text,
+            )
+            vector = resp.data[0].embedding
+            logger.debug(
+                "向量化完成 [%s@%s]，耗时 %.2fs，维度 %d",
+                model, provider_name, time.time() - start, len(vector),
+            )
+            return vector
+        except (RateLimitError, APIError) as e:
+            if not self._fallback and _is_quota_error(e):
+                logger.warning("阿里百炼向量化额度不足 (%s)，降级到本地 Ollama", e)
+                self._fallback = True
+                return await self.embed(text)
+            logger.error("向量化失败 [%s]: %s", provider_name, e)
+            raise
 
 
 # ==================== 全局单例 ====================
 
-_client: BailianClient | None = None
+_client: LLMClient | None = None
 
 
-def get_llm_client() -> BailianClient:
-    """获取 LLM 客户端单例
-
-    全局共享一个客户端实例，避免重复创建连接。
-    """
+def get_llm_client() -> LLMClient:
+    """获取 LLM 客户端单例"""
     global _client
     if _client is None:
         logger.info("首次初始化 LLM 客户端")
-        _client = BailianClient()
+        _client = LLMClient()
     return _client

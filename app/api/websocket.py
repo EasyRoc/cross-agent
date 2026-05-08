@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.models.state import INITIAL_STATE
 from app.llm.client import get_llm_client
+from app.memory.short_term import ShortTermMemory
 from app.report.generator import get_report_generator
 from app.auth import get_user_by_token
 from app.task.manager import TaskManager
@@ -106,6 +107,7 @@ async def websocket_endpoint(
     """
     await websocket.accept()
     state = dict(INITIAL_STATE)
+    short_term = ShortTermMemory(window=settings.short_term_window)
     active_sessions[session_id] = state
     llm = get_llm_client()
 
@@ -129,7 +131,7 @@ async def websocket_endpoint(
 
             if msg_type == "user_message":
                 content = msg.get("content", "")
-                state["messages"] = state.get("messages", []) + [{"role": "user", "content": content}]
+                state["messages"] = short_term.add(state["messages"], "user", content)
                 logger.info("用户输入 [%s]: %s", session_id, content[:60])
 
                 # ============ 1. 意图识别 ============
@@ -153,12 +155,13 @@ async def websocket_endpoint(
                 if intent != "product_analysis" or confidence < 0.7:
                     logger.info("普通对话模式，流式回复")
                     full = ""
-                    async for token_text in llm.chat_stream(messages=state["messages"][-10:], temperature=0.7):
+                    context = short_term.trim(state["messages"])
+                    async for token_text in llm.chat_stream(messages=context, temperature=0.7):
                         full += token_text
                         await websocket.send_text(json.dumps(
                             {"type": "token", "content": token_text}, ensure_ascii=False
                         ))
-                    state["messages"] += [{"role": "assistant", "content": full}]
+                    state["messages"] = short_term.add(state["messages"], "assistant", full)
                     await websocket.send_text(json.dumps(
                         {"type": "done", "intent": "normal_chat"}, ensure_ascii=False
                     ))

@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # ==================== Human-in-the-Loop ====================
     max_iterations: int = 3  # 用户拒绝后最大重新分析次数
 
+    # ==================== Ollama 本地模型（降级方案） ====================
+    # 当阿里百炼额度不足时自动降级到本地 Ollama 模型
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_model: str = "qwen3:8b"
+    ollama_embedding_model: str = "qwen2.5:7b"
+
     # ==================== Milvus 集合配置 ====================
     milvus_collection: str = "product_catalog"  # 商品目录集合名
     milvus_dense_dim: int = 1024  # 密集向量维度
