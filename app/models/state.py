@@ -29,6 +29,8 @@ class AgentState(TypedDict):
     intent: str                   # 意图识别结果：product_analysis / normal_chat
     intent_confidence: float      # 意图识别的置信度（0.0 ~ 1.0）
     params: Optional[dict]        # 提取的分析参数（AnalysisParams 的字典形式）
+    task_id: str                  # 任务 ID（指向 task manager 中的记录），需持久化用于 checkpoint 恢复后更新状态
+    user_id: str                  # 用户 ID
 
     # ========== 状态流转 ==========
     status: str                   # 当前状态，见 AgentStatus 枚举
@@ -45,13 +47,14 @@ class AgentState(TypedDict):
     report_filename: str          # 报告文件名（不含后缀）
 
 
-# AgentState 的默认初始值
 INITIAL_STATE: AgentState = {
     "messages": [],                # 空对话历史
     "summary": "",                 # 无摘要
     "intent": "",                  # 未识别
     "intent_confidence": 0.0,      # 零置信度
     "params": None,                # 未提取参数
+    "task_id": "",                 # 任务 ID（由 chat.py 运行时设置）
+    "user_id": "",                 # 用户 ID
     "status": "pending",           # 初始状态
     "iteration": 0,                # 未迭代
     "feedback": "",                # 无反馈

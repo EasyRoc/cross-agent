@@ -153,6 +153,7 @@ async def _chat_stream(content: str, session_id: str, token: str):
         })
     except RuntimeError as e:
         yield _sse("error", {"content": str(e)})
+        return
 
     # 检查是否已有中断中的图（同一个 session_id 发来第二条消息）
     graph = get_analysis_graph()

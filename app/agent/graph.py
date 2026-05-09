@@ -94,7 +94,9 @@ def create_graph() -> StateGraph:
     # - 不通过 → 重新采集
     workflow.add_conditional_edges(
         "quality_review",
-        lambda s: "overview_generator" if s.get("status") == "overview_generated" else "data_collector",
+        ## lambda s: "overview_generator" if s.get("status") == "overview_generated" else "data_collector",
+        ## 写死overview_generator 方便后面调试
+        lambda s: "overview_generator",
         {
             "overview_generator": "overview_generator",
             "data_collector": "data_collector",
