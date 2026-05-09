@@ -128,27 +128,31 @@ async def _chat_stream(content: str, session_id: str, token: str):
         return
 
     # ---------- 3. 商品分析 — 走 LangGraph ----------
+    # 未登录用户不允许使用商品分析
+    if not current_user:
+        yield _sse("error", {"content": "请先登录后再使用商品分析功能"})
+        return
+
     state = dict(INITIAL_STATE)
     state["messages"] = [{"role": "user", "content": content}]
     state["intent"] = "product_analysis"
     state["intent_confidence"] = confidence
+    state["user_id"] = current_user["id"]
 
-    # 创建任务（仅在用户认证后）
+    # 创建任务
     current_task_id = None
-    if current_user:
-        state["user_id"] = current_user["id"]
-        try:
-            manager = TaskManager()
-            current_task_id = manager.create_task(
-                user_id=current_user["id"],
-                product_name=content[:50],
-            )
-            state["task_id"] = current_task_id
-            yield _sse("task_status", {
-                "task_id": current_task_id, "status": "pending", "progress": "任务已创建",
-            })
-        except RuntimeError as e:
-            yield _sse("error", {"content": str(e)})
+    try:
+        manager = TaskManager()
+        current_task_id = manager.create_task(
+            user_id=current_user["id"],
+            product_name=content[:50],
+        )
+        state["task_id"] = current_task_id
+        yield _sse("task_status", {
+            "task_id": current_task_id, "status": "pending", "progress": "任务已创建",
+        })
+    except RuntimeError as e:
+        yield _sse("error", {"content": str(e)})
 
     # 检查是否已有中断中的图（同一个 session_id 发来第二条消息）
     graph = get_analysis_graph()
