@@ -35,6 +35,7 @@ class AgentState(TypedDict):
     # ========== 状态流转 ==========
     status: str                   # 当前状态，见 AgentStatus 枚举
     iteration: int                # 当前迭代次数（HIL 重分析计数）
+    quality_iteration: int        # 质量审核未通过的自动重试计数
     feedback: str                 # 用户反馈（拒绝时填写）
 
     # ========== 数据 ==========
@@ -57,6 +58,7 @@ INITIAL_STATE: AgentState = {
     "user_id": "",                 # 用户 ID
     "status": "pending",           # 初始状态
     "iteration": 0,                # 未迭代
+    "quality_iteration": 0,        # 质量审核未重试过
     "feedback": "",                # 无反馈
     "raw_data": [],                # 无数据
     "analysis_results": {},        # 无分析结果

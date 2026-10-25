@@ -15,7 +15,7 @@
 | **报告生成** | 固定模板的 Markdown 报告，支持 PDF 导出 |
 | **Human-in-the-Loop** | 生成概览 → 用户确认/反馈 → 迭代改进 → 输出终稿 |
 | **流式输出** | LLM 推理结果逐 token 推送到前端，实时展示 |
-| **记忆管理** | 短期记忆（滑动窗口 20 轮）+ 摘要记忆（LLM 自动总结，待启用） |
+| **记忆管理** | 短期记忆（滑动窗口 20 轮），摘要记忆规划中 |
 | **用户认证** | 注册/登录 + JWT 令牌，分析任务与用户绑定 |
 | **任务管理** | 任务列表、状态跟踪、报告下载、删除 |
 | **LLM 降级** | 阿里百炼额度不足时自动降级到本地 Ollama 模型 |
@@ -55,7 +55,7 @@ git clone <repo-url> && cd cross-agent
 python -m venv .venv && source .venv/bin/activate
 
 # 3. 安装依赖
-pip install -r requirements.txt
+pip install -e .
 
 # 4. 配置环境变量
 cp .env.example .env
@@ -74,7 +74,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 # 提前启动 Ollama 并拉取模型
 ollama pull qwen3:8b
-ollama pull nomic-embed-text
+ollama pull dengcao/Qwen3-Embedding-4B:Q4_K_M
 
 # 修改 .env 清空 DASHSCOPE_API_KEY 即可触发降级
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -104,7 +104,7 @@ MILVUS_PORT=19530
 # 当阿里百炼额度不足或未配置时自动降级
 # OLLAMA_BASE_URL=http://localhost:11434/v1      # 默认值
 # OLLAMA_MODEL=qwen3:8b                          # 对话模型
-# OLLAMA_EMBEDDING_MODEL=nomic-embed-text        # 向量模型
+# OLLAMA_EMBEDDING_MODEL=dengcao/Qwen3-Embedding-4B:Q4_K_M   # 向量模型
 
 # === 用户认证 / JWT ===
 JWT_SECRET_KEY=your-secret-key-here              # 生产环境务必修改
@@ -122,7 +122,7 @@ APP_PORT=8000
 | 意图识别 | `qwen-plus` | `qwen3:8b` |
 | 数据分析 | `qwen-max` | `qwen3:8b` |
 | 报告生成 | `qwen-max` | `qwen3:8b` |
-| 文本向量化 | `text-embedding-v3` | `nomic-embed-text` |
+| 文本向量化 | `text-embedding-v3` | `dengcao/Qwen3-Embedding-4B:Q4_K_M` |
 | 摘要记忆 | `qwen-plus` | `qwen3:8b` |
 
 ### LLM 降级机制
@@ -168,23 +168,38 @@ APP_PORT=8000
 6. **确认/反馈** → 确认则生成报告，拒绝可输入改进建议（最多 3 轮迭代）
 7. **下载报告** → Markdown / PDF 格式下载
 
-### WebSocket 协议
+### API 接口（SSE + REST）
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/chat` | POST | 发送消息 / 发起分析，SSE 流式返回 |
+| `/api/chat/decide` | POST | 概览决策（confirm/reject/terminate），SSE 流式返回 |
+| `/api/chat/terminate` | POST | 终止当前分析 |
+| `/api/register` · `/api/login` | POST | 用户注册 / 登录（返回 JWT） |
+| `/api/me` | GET | 当前用户信息（需鉴权） |
+| `/api/tasks` · `/api/tasks/{id}` | GET | 任务列表 / 详情（需鉴权） |
+| `/api/tasks/{id}/download/md` · `/pdf` | GET | 报告下载（需鉴权，支持 `?token=` 参数） |
+
+请求体示例：
 
 ```json
-// 客户端 → 服务端
-{"type": "user_message", "content": "男式衬衫爆款分析"}
-{"type": "decision", "action": "confirm|reject|terminate", "feedback": "..."}
+// POST /api/chat
+{"content": "男式衬衫爆款分析", "session_id": "uuid"}
 
-// 服务端 → 客户端
-{"type": "token", "content": "正在..."}              // 流式 token
-{"type": "done", "intent": "product_analysis"}      // 流式结束
-{"type": "status", "content": "正在采集..."}         // 状态提示
-{"type": "overview", "data": {...}}                 // 分析概览
-{"type": "report_ready", "url": "..."}              // 报告就绪
-{"type": "task_status", "task_id": "...", ...}      // 任务状态更新
-{"type": "task_list", "tasks": [...]}               // 任务列表
-{"type": "error", "content": "..."}                 // 错误
-{"type": "terminated", "content": "..."}            // 终止
+// POST /api/chat/decide
+{"session_id": "uuid", "action": "confirm|reject|terminate", "feedback": "..."}
+```
+
+SSE 事件（`event: <名称>` + `data: <json>`）：
+
+```text
+token         {"content": "..."}                  // 流式 token
+done          {"intent": "product_analysis"}      // 流式结束
+status        {"content": "正在采集..."}           // 状态提示
+overview      {"data": {...}}                     // 分析概览
+report_ready  {"markdown_url": "...", "pdf_url": "..."}
+task_status   {"task_id": "...", "status": "..."}
+error         {"content": "..."}                  // 错误
 ```
 
 ---
@@ -210,8 +225,7 @@ cross-agent/
 │   │   └── client.py         # LLMClient：统一 chat/stream/embed，百炼→Ollama 降级
 │   │
 │   ├── memory/               # 记忆系统
-│   │   ├── short_term.py     # 短期记忆（滑动窗口 20 轮）
-│   │   └── summary_memory.py # 摘要记忆（LLM 自动总结，待接入）
+│   │   └── short_term.py     # 短期记忆（滑动窗口 20 轮）
 │   │
 │   ├── mcp/                  # 数据采集层
 │   │   ├── base.py           # MCP 基类 + ProductResult 数据模型
@@ -236,7 +250,7 @@ cross-agent/
 │   │       └── human_feedback.py
 │   │
 │   ├── api/                  # API 端点
-│   │   ├── websocket.py      # WebSocket 实时通信
+│   │   ├── chat.py           # 对话 + 分析 SSE 端点（chat / decide / terminate）
 │   │   └── user_api.py       # 用户 REST API（注册/登录/任务 CRUD）
 │   │
 │   ├── task/                 # 任务管理
@@ -274,15 +288,20 @@ cross-agent/
 |----|------|------|
 | fastapi | >=0.111.0 | Web 框架 |
 | uvicorn | >=0.29.0 | ASGI 服务器 |
-| websockets | >=12.0 | WebSocket 支持 |
+| websockets | >=12.0 | ASGI WebSocket 库（uvicorn[standard] 附带，应用层走 SSE 未直接使用） |
 | openai | >=1.30.0 | LLM 客户端（百炼 + Ollama OpenAI 兼容 API） |
 | httpx | — | Ollama 原生 API 调用（transitive） |
 | langgraph | >=0.2.0 | Agent 图编排 |
 | langchain | >=0.3.0 | LangChain 生态 |
+| langchain-community | >=0.3.0 | LangChain 生态集成 |
+| rank-bm25 | >=0.2.2 | BM25 稀疏检索（RAG 混合检索） |
 | pymilvus | >=2.4.0 | Milvus 向量数据库 |
 | tavily | >=0.3.0 | 网络搜索 |
 | sentence-transformers | >=3.0.0 | 文本向量化（可选） |
 | weasyprint | >=62.0 | HTML → PDF 转换 |
+| markdown | >=3.6 | Markdown → HTML（PDF 渲染前置） |
+| jinja2 | >=3.1.0 | HTML 模板渲染（PDF 报告） |
+| python-dotenv | >=1.0.0 | .env 文件加载 |
 | pydantic-settings | >=2.2.0 | 环境变量加载 |
 | aiofiles | >=23.0.0 | 异步文件操作 |
 | bcrypt | >=4.1.0 | 密码哈希 |

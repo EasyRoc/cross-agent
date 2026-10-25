@@ -194,6 +194,8 @@ async def _chat_stream(content: str, session_id: str, token: str):
                 passed = review.get("passed", True)
                 if passed:
                     yield _sse("status", {"content": f"质量审核通过（得分 {score}）"})
+                elif review.get("forced"):
+                    yield _sse("status", {"content": f"质量审核得分 {score}，已达重试上限，生成概览供人工确认"})
                 else:
                     yield _sse("status", {"content": f"质量审核得分 {score}，尝试改进中..."})
 

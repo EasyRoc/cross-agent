@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # ==================== Human-in-the-Loop ====================
     max_iterations: int = 3  # 用户拒绝后最大重新分析次数
 
+    # ==================== 质量审核 ====================
+    max_quality_retries: int = 2  # 质量审核未通过时的最大自动重新采集次数
+
     # ==================== Ollama 本地模型（降级方案） ====================
     # 当阿里百炼额度不足时自动降级到本地 Ollama 模型
     ollama_base_url: str = "http://localhost:11434/v1"
@@ -64,7 +67,7 @@ class Settings(BaseSettings):
 
     # ==================== Milvus 集合配置 ====================
     milvus_collection: str = "product_catalog"  # 商品目录集合名
-    milvus_dense_dim: int = 1024  # 密集向量维度d
+    milvus_dense_dim: int = 1024  # 密集向量维度
 
     # ==================== RAG 检索参数 ====================
     rag_dense_weight: float = 0.7   # 密集向量检索权重（语义匹配）

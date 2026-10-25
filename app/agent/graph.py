@@ -90,13 +90,11 @@ def create_graph() -> StateGraph:
     workflow.add_edge("multi_dim_analyzer", "quality_review")
 
     # 质量审核条件分支
-    # - 通过 → 生成概览
+    # - 通过（或达重试上限，由 quality_review 节点控制）→ 生成概览
     # - 不通过 → 重新采集
     workflow.add_conditional_edges(
         "quality_review",
-        ## lambda s: "overview_generator" if s.get("status") == "overview_generated" else "data_collector",
-        ## 写死overview_generator 方便后面调试
-        lambda s: "overview_generator",
+        lambda s: "overview_generator" if s.get("status") == "overview_generated" else "data_collector",
         {
             "overview_generator": "overview_generator",
             "data_collector": "data_collector",

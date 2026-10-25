@@ -54,11 +54,15 @@ async def human_feedback_node(state: dict) -> dict:
     else:
         state["status"] = "terminated"
 
-    return {
+    updates = {
         "status": state["status"],
         "feedback": state.get("feedback", ""),
         "iteration": state.get("iteration", 0),
     }
+    if action == "reject":
+        # 用户反馈开启新一轮分析，重置质量审核重试计数
+        updates["quality_iteration"] = 0
+    return updates
 
 
 def decide_next_step(state: dict) -> str:
