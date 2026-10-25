@@ -15,6 +15,7 @@
 const STATE = {
   sessionId: null,
   isProcessing: false,
+  pendingDecision: null,   // 'confirm' | 'reject' | 'terminate'：决策请求已发出、未确认
   currentStreamMsg: null,
   overviewData: null,
   analysisProgress: [],
@@ -57,7 +58,6 @@ async function sseFetch(url, body) {
   } catch (e) {
     console.error('[SSE] 网络错误:', e);
     handleMessage({ type: 'error', content: '网络连接失败，请检查网络后重试' });
-    setProcessing(false);
     return;
   }
 
@@ -68,13 +68,11 @@ async function sseFetch(url, body) {
       detail = err.detail || detail;
     } catch (_) { /* ignore */ }
     handleMessage({ type: 'error', content: detail });
-    setProcessing(false);
     return;
   }
 
   if (!resp.body) {
     handleMessage({ type: 'error', content: '浏览器不支持流式读取' });
-    setProcessing(false);
     return;
   }
 
@@ -112,7 +110,9 @@ async function sseFetch(url, body) {
     }
   } catch (e) {
     console.error('[SSE] 读取流错误:', e);
+    handleMessage({ type: 'error', content: '网络中断，本次回复未完成，请重试' });
   }
+  onStreamEnd();
 }
 
 // ==================== 消息分发 ====================
@@ -151,6 +151,13 @@ function handleMessage(msg) {
     case 'status':
       // 状态提示
       removeTyping();
+      if (STATE.pendingDecision) {
+        // 决策请求已被后端接受，收起概览卡并清空反馈框
+        STATE.pendingDecision = null;
+        setDecisionBusy(false);
+        document.getElementById('overviewCard').style.display = 'none';
+        document.getElementById('feedbackInput').value = '';
+      }
       if (getToken()) {
         updateProgress(msg.content);
       }
@@ -160,6 +167,8 @@ function handleMessage(msg) {
       // 概览就绪
       removeTyping();
       STATE.overviewData = msg.data;
+      STATE.pendingDecision = null;
+      setDecisionBusy(false);
       if (getToken()) {
         showOverview(msg.data);
         setProcessing(false);
@@ -176,6 +185,8 @@ function handleMessage(msg) {
     case 'report_ready':
       // 报告就绪
       removeTyping();
+      STATE.pendingDecision = null;
+      setDecisionBusy(false);
       if (getToken()) {
         showReportPanel(msg);
       } else {
@@ -188,20 +199,21 @@ function handleMessage(msg) {
 
     case 'error':
       removeTyping();
+      // 收尾未完成的流式消息，避免残留 streaming 样式
+      if (STATE.currentStreamMsg) {
+        STATE.currentStreamMsg.classList.remove('streaming');
+        STATE.currentStreamMsg = null;
+      }
+      if (STATE.pendingDecision) {
+        // 决策请求失败：恢复概览卡，用户可重试或终止
+        restoreDecisionCard();
+        addMessage('❌ ' + msg.content, 'error');
+        break;
+      }
       addMessage('❌ ' + msg.content, 'error');
       setProcessing(false);
       input.disabled = false;
       sendBtn.disabled = false;
-      break;
-
-    case 'terminated':
-      removeTyping();
-      addMessage('分析已终止，可以输入新请求。', 'system');
-      resetSidebar();
-      setProcessing(false);
-      input.disabled = false;
-      sendBtn.disabled = false;
-      input.focus();
       break;
 
     case 'task_status':
@@ -260,11 +272,46 @@ function quickInput(text) {
 
 // ==================== 用户决策 ====================
 
+function setDecisionBusy(busy) {
+  ['confirmBtn', 'rejectBtn', 'terminateBtn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = busy;
+  });
+  const feedback = document.getElementById('feedbackInput');
+  if (feedback) feedback.disabled = busy;
+}
+
+function restoreDecisionCard() {
+  // 决策失败后回到"等待决策"状态：概览卡恢复、输入区保持禁用
+  STATE.pendingDecision = null;
+  setDecisionBusy(false);
+  STATE.isProcessing = false;
+  removeTyping();
+  if (STATE.overviewData) {
+    showOverview(STATE.overviewData);
+  }
+}
+
+function onStreamEnd() {
+  // terminate 决策：后端不产生流事件，流结束即视为终止完成
+  if (STATE.pendingDecision === 'terminate') {
+    STATE.pendingDecision = null;
+    setDecisionBusy(false);
+    removeTyping();
+    addMessage('分析已终止，可以输入新请求。', 'system');
+    resetSidebar();
+    setProcessing(false);
+    document.getElementById('inputBox').focus();
+  }
+}
+
 function confirmAnalysis() {
-  document.getElementById('overviewCard').style.display = 'none';
+  if (STATE.isProcessing) return;
+  STATE.pendingDecision = 'confirm';
+  setDecisionBusy(true);
+  STATE.isProcessing = true;
   addMessage('已确认，正在生成详细报告...', 'system');
   addTyping();
-  STATE.isProcessing = true;
   sseFetch('/api/chat/decide', {
     session_id: getSessionId(),
     action: 'confirm',
@@ -272,19 +319,21 @@ function confirmAnalysis() {
 }
 
 function rejectAnalysis() {
-  const feedback = document.getElementById('feedbackInput').value.trim();
+  if (STATE.isProcessing) return;
+  const feedbackEl = document.getElementById('feedbackInput');
+  const feedback = feedbackEl.value.trim();
   if (!feedback) {
-    document.getElementById('feedbackInput').focus();
-    document.getElementById('feedbackInput').style.borderColor = '#ef4444';
-    setTimeout(() => document.getElementById('feedbackInput').style.borderColor = '', 2000);
+    feedbackEl.focus();
+    feedbackEl.style.borderColor = '#ef4444';
+    setTimeout(() => feedbackEl.style.borderColor = '', 2000);
     return;
   }
-  document.getElementById('overviewCard').style.display = 'none';
-  document.getElementById('feedbackInput').value = '';
+  STATE.pendingDecision = 'reject';
+  setDecisionBusy(true);
+  STATE.isProcessing = true;
   addMessage('已提交反馈，正在重新分析...', 'system');
   resetProgress();
   addTyping();
-  STATE.isProcessing = true;
   sseFetch('/api/chat/decide', {
     session_id: getSessionId(),
     action: 'reject',
@@ -293,18 +342,16 @@ function rejectAnalysis() {
 }
 
 function terminateAnalysis() {
+  if (STATE.isProcessing) return;
   if (!confirm('确定要终止当前分析吗？')) return;
-  const token = getToken();
-  fetch('/api/chat/terminate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ session_id: getSessionId() }),
-  }).catch(e => console.error('终止请求失败:', e));
-  document.getElementById('overviewCard').style.display = 'none';
-  document.getElementById('feedbackInput').value = '';
+  STATE.pendingDecision = 'terminate';
+  setDecisionBusy(true);
+  STATE.isProcessing = true;
+  addMessage('正在终止当前分析...', 'system');
+  sseFetch('/api/chat/decide', {
+    session_id: getSessionId(),
+    action: 'terminate',
+  });
 }
 
 function startNewAnalysis() {
@@ -463,8 +510,15 @@ function showReportPanel(data) {
 
   document.getElementById('downloadMd').href = data.markdown_url;
   document.getElementById('downloadMd').download = data.markdown_filename;
-  document.getElementById('downloadPdf').href = data.pdf_url;
-  document.getElementById('downloadPdf').download = data.pdf_filename;
+  const pdfBtn = document.getElementById('downloadPdf');
+  if (data.pdf_url) {
+    pdfBtn.style.display = '';
+    pdfBtn.href = data.pdf_url;
+    pdfBtn.download = data.pdf_filename;
+  } else {
+    // PDF 生成失败时隐藏下载入口，避免给出死链接
+    pdfBtn.style.display = 'none';
+  }
 
   addMessage('✅ 报告已生成，请在右侧下载。', 'system');
   autoScroll();

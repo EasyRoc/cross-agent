@@ -5,8 +5,11 @@
 - Markdown: 直接保存 .md 文件
 - PDF: 经 Markdown → HTML → weasyprint → PDF 转换
 
-PDF 转换依赖 weasyprint 库，如安装失败会自动回退到 Markdown。
+PDF 转换依赖 weasyprint 库；转换失败时返回空路径（报告仍提供 Markdown 格式），
+调用方不得以 Markdown 路径冒充 PDF 路径。
 """
+
+import re
 
 import markdown
 from pathlib import Path
@@ -14,6 +17,17 @@ from app.config import settings
 from app.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def sanitize_filename(name: str, max_len: int = 80) -> str:
+    """消毒文件名：仅保留中英文/数字/下划线/连字符，防止路径穿越与非法字符
+
+    商品名来自 LLM 参数提取（源头是用户输入），可能包含 ../、/ 等字符，
+    直接拼路径会造成任意文件写入。
+    """
+    cleaned = re.sub(r"[^\w\-]", "_", name)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._-")
+    return cleaned[:max_len] or "report"
 
 
 class ReportGenerator:
@@ -42,7 +56,7 @@ class ReportGenerator:
         Returns:
             文件的完整路径
         """
-        filepath = self.output_dir / f"{filename}.md"
+        filepath = self.output_dir / f"{sanitize_filename(filename)}.md"
         filepath.write_text(content, encoding="utf-8")
         logger.info("Markdown 报告已保存: %s (%d 字符)", filepath, len(content))
         return str(filepath)
@@ -73,7 +87,7 @@ class ReportGenerator:
             filename: 文件名（不含扩展名）
 
         Returns:
-            PDF 文件的完整路径；若 weasyprint 不可用则回退到 .md
+            PDF 文件的完整路径；weasyprint 不可用或渲染失败时返回空字符串
         """
         html_content = self.markdown_to_html(md_content)
 
@@ -100,14 +114,14 @@ th {{ background: #f3f4f6; }}
 </body>
 </html>"""
 
-        filepath = self.output_dir / f"{filename}.pdf"
+        filepath = self.output_dir / f"{sanitize_filename(filename)}.pdf"
         try:
             from weasyprint import HTML
             HTML(string=styled_html).write_pdf(str(filepath))
             logger.info("PDF 报告已保存: %s", filepath)
         except Exception as e:
-            logger.warning("PDF 生成失败（%s），回退到 Markdown", e)
-            return self.save_markdown(md_content, filename)
+            logger.warning("PDF 生成失败（%s），报告仅提供 Markdown 格式", e)
+            return ""
 
         return str(filepath)
 

@@ -235,6 +235,17 @@ async def _decide_stream(session_id: str, action: str, feedback: str, token: str
         yield _sse("error", {"content": "会话不在等待决策状态"})
         return
 
+    # 决策鉴权：仅登录用户且为会话归属人可决策
+    current_user = get_user_by_token(token) if token else None
+    if not current_user:
+        yield _sse("error", {"content": "请先登录后再操作"})
+        return
+    owner_id = (snapshot.values or {}).get("user_id", "")
+    if owner_id != current_user["id"]:
+        logger.warning("用户 %s 试图操作他人会话 (session=%s)", current_user["id"], session_id)
+        yield _sse("error", {"content": "无权操作该会话"})
+        return
+
     state_values = snapshot.values
     current_task_id = state_values.get("task_id")
     download_token_prefix = f"?token={token}" if token else ""
@@ -280,27 +291,35 @@ async def _decide_stream(session_id: str, action: str, feedback: str, token: str
                     yield _sse("error", {"content": "报告内容为空"})
                     continue
 
-                # 保存文件
+                # 保存文件（save_pdf 失败时返回空字符串，报告仅提供 Markdown）
                 report_gen = get_report_generator()
                 md_path = report_gen.save_markdown(report_content, report_filename)
                 pdf_path = report_gen.save_pdf(report_content, report_filename)
 
-                # 认证用户：复制到用户目录 + 更新任务记录
+                # 认证用户：文件统一移动到用户目录 + 更新任务记录
                 if current_task_id and state_values.get("user_id"):
                     manager = TaskManager()
                     user_dir = Path(settings.report_output_dir) / state_values["user_id"]
                     user_dir.mkdir(parents=True, exist_ok=True)
-                    md_user_path = user_dir / Path(md_path).name
-                    pdf_user_path = user_dir / Path(pdf_path).name
-                    if not md_user_path.exists():
-                        Path(md_path).rename(md_user_path)
+                    try:
+                        md_user_path = _move_report_file(md_path, user_dir)
+                        pdf_user_path = _move_report_file(pdf_path, user_dir) if pdf_path else None
+                    except OSError as e:
+                        logger.error("报告文件移动失败: %s", e, exc_info=True)
+                        manager.update_task(
+                            current_task_id,
+                            status="failed",
+                            error_message=f"报告文件保存失败: {e}",
+                        )
+                        yield _sse("error", {"content": "报告文件保存失败，请稍后在任务列表重试"})
+                        continue
 
                     manager.update_task(
                         current_task_id,
                         status="completed",
                         progress='{"step": "completed"}',
                         report_md_path=str(md_user_path),
-                        report_pdf_path=str(pdf_user_path) if Path(pdf_path).exists() else "",
+                        report_pdf_path=str(pdf_user_path) if pdf_user_path else "",
                     )
 
                     yield _sse("task_status", {
@@ -309,22 +328,30 @@ async def _decide_stream(session_id: str, action: str, feedback: str, token: str
                         "progress": "报告已生成",
                     })
 
-                    yield _sse("report_ready", {
+                    report_payload = {
                         "markdown_url": f"/api/tasks/{current_task_id}/download/md{download_token_prefix}",
-                        "pdf_url": f"/api/tasks/{current_task_id}/download/pdf{download_token_prefix}",
-                        "markdown_filename": Path(md_user_path).name,
-                        "pdf_filename": Path(pdf_user_path).name,
-                    })
+                        "markdown_filename": md_user_path.name,
+                    }
+                    if pdf_user_path:
+                        report_payload.update({
+                            "pdf_url": f"/api/tasks/{current_task_id}/download/pdf{download_token_prefix}",
+                            "pdf_filename": pdf_user_path.name,
+                        })
+                    yield _sse("report_ready", report_payload)
                 else:
-                    # 匿名用户：使用通用下载路径
+                    # 匿名用户（遗留路径）：使用通用下载目录
                     logger.info("报告已生成: md=%s, pdf=%s",
-                                 Path(md_path).name, Path(pdf_path).name)
-                    yield _sse("report_ready", {
+                                 Path(md_path).name, pdf_path or "无")
+                    payload = {
                         "markdown_url": f"/download/{Path(md_path).name}",
-                        "pdf_url": f"/download/{Path(pdf_path).name}",
                         "markdown_filename": Path(md_path).name,
-                        "pdf_filename": Path(pdf_path).name,
-                    })
+                    }
+                    if pdf_path:
+                        payload.update({
+                            "pdf_url": f"/download/{Path(pdf_path).name}",
+                            "pdf_filename": Path(pdf_path).name,
+                        })
+                    yield _sse("report_ready", payload)
 
     except Exception as e:
         logger.error("决策流程出错: %s", e, exc_info=True)
@@ -367,17 +394,30 @@ async def decide(request: DecideRequest, raw_request: Request):
 
 
 @router.post("/api/chat/terminate")
-async def terminate(request: DecideRequest):
-    """终止当前分析。"""
+async def terminate(request: DecideRequest, raw_request: Request):
+    """终止当前分析（需登录且为会话归属人）。"""
+    token = _resolve_token(raw_request)
+    current_user = get_user_by_token(token) if token else None
+    if not current_user:
+        raise HTTPException(status_code=401, detail="请先登录")
+
     graph = get_analysis_graph()
     config = {"configurable": {"thread_id": request.session_id}}
     try:
         snapshot = await graph.aget_state(config)
-        if snapshot and snapshot.next:
-            async for _ in graph.astream(Command(resume={"action": "terminate"}), config, stream_mode="updates"):
-                pass
-    except (ValueError, Exception):
-        pass
+    except ValueError:
+        snapshot = None
+
+    if snapshot:
+        owner_id = (snapshot.values or {}).get("user_id", "")
+        if owner_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="无权操作该会话")
+        if snapshot.next:
+            try:
+                async for _ in graph.astream(Command(resume={"action": "terminate"}), config, stream_mode="updates"):
+                    pass
+            except Exception as e:
+                logger.warning("终止会话 %s 时出错: %s", request.session_id, e)
     return {"status": "terminated", "content": "分析已终止。"}
 
 
@@ -391,16 +431,24 @@ async def health():
 
 @router.get("/download/{filename}")
 async def download_report(filename: str):
-    """旧版匿名报告下载。"""
-    report_dir = Path(settings.report_output_dir)
-    filepath = report_dir / filename
-    if not filepath.exists():
+    """旧版匿名报告下载（仅限 reports 目录内文件，防路径穿越）。"""
+    report_dir = Path(settings.report_output_dir).resolve()
+    filepath = (report_dir / filename).resolve()
+    if not filepath.is_relative_to(report_dir) or not filepath.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     media_type = "application/octet-stream" if filepath.suffix == ".pdf" else "text/markdown"
     return FileResponse(path=str(filepath), filename=filepath.name, media_type=media_type)
 
 
 # ==================== 辅助函数 ====================
+
+
+def _move_report_file(src: str, dest_dir: Path) -> Path:
+    """把报告文件移动到目标目录（同名时覆盖旧文件），返回新路径"""
+    src_path = Path(src)
+    dest = dest_dir / src_path.name
+    src_path.replace(dest)
+    return dest
 
 
 def _update_task_progress(task_id: str | None, step: str):

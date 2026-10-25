@@ -37,6 +37,7 @@ class MilvusClient:
         self.port = settings.milvus_port
         self.collection_name = settings.milvus_collection
         self.connected = False
+        self._collection_dim: int | None = None
 
     def connect(self):
         """连接到 Milvus 服务
@@ -141,6 +142,26 @@ class MilvusClient:
             logger.error("数据插入失败: %s", e)
             return None
 
+    def get_collection_dim(self) -> int | None:
+        """读取集合密集向量字段的维度（带缓存）
+
+        用于在检索前校验查询向量维度，防止 embedding 模型与建库模型
+        不一致时（如降级到本地 Ollama 模型）触发维度错误。
+        """
+        if self._collection_dim is not None:
+            return self._collection_dim
+        collection = self.get_collection()
+        if collection is None:
+            return None
+        try:
+            for field in collection.schema.fields:
+                if field.name == "dense_vector":
+                    self._collection_dim = (field.params or {}).get("dim")
+                    break
+        except Exception as e:
+            logger.warning("读取集合维度失败: %s", e)
+        return self._collection_dim
+
     def search(self, vector: list[float], top_k: int = 20) -> list[dict]:
         """向量检索
 
@@ -155,6 +176,15 @@ class MilvusClient:
         """
         collection = self.get_collection()
         if collection is None:
+            return []
+
+        expected_dim = self.get_collection_dim()
+        if expected_dim and len(vector) != expected_dim:
+            logger.error(
+                "Embedding 维度不匹配：查询向量 %d 维，集合 '%s' 为 %d 维。"
+                "请确认 embedding 模型与建库模型一致；本次跳过 RAG 检索，仅使用其他数据源",
+                len(vector), self.collection_name, expected_dim,
+            )
             return []
 
         try:

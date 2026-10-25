@@ -95,9 +95,9 @@ tailwind.config = {
         <div class="overview-actions">
           <textarea class="feedback-input" id="feedbackInput" placeholder="改进建议（可选）..." rows="2"></textarea>
           <div class="action-row">
-            <button class="btn btn-primary" onclick="confirmAnalysis()">✅ 确认生成报告</button>
-            <button class="btn btn-outline" onclick="rejectAnalysis()">🔄 重新分析</button>
-            <button class="btn btn-ghost" onclick="terminateAnalysis()">终止</button>
+            <button class="btn btn-primary" id="confirmBtn" onclick="confirmAnalysis()">✅ 确认生成报告</button>
+            <button class="btn btn-outline" id="rejectBtn" onclick="rejectAnalysis()">🔄 重新分析</button>
+            <button class="btn btn-ghost" id="terminateBtn" onclick="terminateAnalysis()">终止</button>
           </div>
         </div>
       </div>

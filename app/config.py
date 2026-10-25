@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_model: str = "qwen3:8b"
     ollama_embedding_model: str = "dengcao/Qwen3-Embedding-4B:Q4_K_M"
+    # 额度枯竭降级后，经过该冷却时长自动试回阿里百炼
+    fallback_cooldown_minutes: int = 60
 
     # ==================== Milvus 集合配置 ====================
     milvus_collection: str = "product_catalog"  # 商品目录集合名

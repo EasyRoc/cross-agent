@@ -12,6 +12,7 @@ from datetime import datetime
 from app.llm.client import get_llm_client
 from app.config import settings
 from app.agent.prompts import REPORT_PROMPT
+from app.report.generator import sanitize_filename
 from app.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,8 +68,8 @@ async def final_report_generator_node(state: dict) -> dict:
         logger.error("报告生成失败: %s", e)
         report = f"# {product} 市场分析报告\n\n报告生成失败: {str(e)}"
 
-    # 生成文件名（含时间戳，避免重复）
-    filename = f"{product}_市场分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    # 生成文件名（含时间戳，避免重复）；商品名经消毒，防止路径穿越
+    filename = f"{sanitize_filename(product)}_市场分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     logger.info("报告文件名: %s", filename)
 
     return {
